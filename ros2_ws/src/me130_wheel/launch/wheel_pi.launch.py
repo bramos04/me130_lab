@@ -1,12 +1,5 @@
 """Wheel speed PI control.
     ros2 launch me130_wheel wheel_pi.launch.py 
-
-The gains default to ZERO, so the wheel does not move until you set them.
-Change the setpoint while running:
-    ros2 topic pub --once /wheel/target_rad_s std_msgs/msg/Float64 "{data: 20.0}"
-Watch the response:
-    ros2 run rqt_plot rqt_plot /wheel/speed_rad_s/data
-To stop, set the target to 0 or Ctrl-C (motor_node coasts when commands stop).
 """
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, Shutdown
