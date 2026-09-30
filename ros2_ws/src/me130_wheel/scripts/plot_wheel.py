@@ -75,7 +75,11 @@ def main():
     ax_w.legend(loc="best", frameon=False, labelcolor=INK_2)
     style(ax_w)
 
-    ax_u.plot(t, df["u"], color=SERIES[2], linewidth=1.2, label="u")
+    # Older logs have no u_unsaturated column; they just show u.
+    if "u_unsaturated" in df.columns:
+        ax_u.plot(t, df["u_unsaturated"], color=SERIES[3], linewidth=1.2,
+                  linestyle="--", label="u unsaturated")
+    ax_u.plot(t, df["u"], color=SERIES[2], linewidth=1.2, label="u saturated")
     ax_u.axhline(0.0, color=MUTED, linewidth=0.8)
     ax_u.set_ylabel("duty command u", color=INK)
     ax_u.set_xlabel("time (s)", color=INK)
