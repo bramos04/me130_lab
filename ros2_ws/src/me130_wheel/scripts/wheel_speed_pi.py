@@ -1,4 +1,20 @@
 #!/usr/bin/env python3
+"""Wheel speed PI control -- the node students edit.
+
+Reads /encoder/state, writes /motor/command. Like controller_node it knows
+nothing about the driver, the deadband or the wiring; motor_node owns that.
+
+Speed is in wheel (output shaft) rad/s. The setpoint is the target_rad_s
+parameter or the latest /wheel/target_rad_s message (std_msgs/Float64). The
+filtered speed is published on /wheel/speed_rad_s for rqt_plot.
+
+With log:=true every control step is written to wheel_<timestamp>.csv in
+output_dir; plot it with
+    python3 ~/me130_lab/ros2_ws/src/me130_wheel/scripts/plot_wheel.py
+
+
+The gains default to ZERO, so a fresh launch does not spin the wheel.
+"""
 import math
 import os
 import time
@@ -24,11 +40,20 @@ class WheelSpeedPI(Node):
         number = ParameterDescriptor(dynamic_typing=True)
         self.target_rad_s = float(self.declare_parameter("target_rad_s", 0.0, number).value)
 
+        # 20 counts per motor rev * 25:1 gearbox (me130_pendulum/hardware.hpp).
         self.counts_per_rev = self.declare_parameter("counts_per_rev", 500.0).value
+        # Speed estimate, before the student's controller sees it. The encoder
+        # rate is counts differenced over one 5 ms sample, so a single count is
+        # ~2.5 rad/s and the raw rate sawtooths as counts land in alternate
+        # samples. Instead difference the absolute counts over a window: one
+        # count over 50 ms is ~0.25 rad/s, for ~25 ms of lag. Then a light
+        # first-order low-pass on top. Longer window/tau = smoother but laggier.
         self.speed_window_s = self.declare_parameter("speed_window_s", 0.05).value
         self.filter_tau_s = self.declare_parameter("filter_tau_s", 0.02).value
         self.count_history = deque()   # (stamp, counts) inside the window
         self.max_duty = self.declare_parameter("max_duty", 1.0).value
+        # A wrong motor_sign turns PI into positive feedback: the output pins at
+        # the limit while the wheel spins the other way. Stop if that persists.
         self.runaway_s = self.declare_parameter("runaway_timeout_s", 0.5).value
         log = self.declare_parameter("log", False).value
         output_dir = self.declare_parameter("output_dir", ".").value
@@ -52,7 +77,7 @@ class WheelSpeedPI(Node):
         if log:
             path = os.path.join(output_dir, time.strftime("wheel_%Y%m%d_%H%M%S.csv"))
             self.csv = open(path, "w")
-            self.csv.write("t_s,mode,target_rad_s,speed_rad_s,u\n")
+            self.csv.write("t_s,mode,target_rad_s,speed_rad_s,u,u_unsaturated\n")
             self.t0 = self.get_clock().now()
             self.get_logger().info(f"logging to {os.path.abspath(path)}")
 
@@ -60,24 +85,24 @@ class WheelSpeedPI(Node):
     # TODO: Implement your controller below
     # ------------------------------------------------------------------ #
     def pi_control(self, speed_cmd, speed, dt):
-        """Return the saturated PWM duty command u
+        """Return the unsaturated PWM duty command u
 
         speed_cmd -- commanded wheel speed, rad/s
         speed     -- measured (filtered) wheel speed, rad/s
         dt        -- time since the last call, s
         """
 
-        # TODO: self.integral and self.last_u are "object attributes" 
-        # that are initialized to zero. Changes to these variables persist across 
-        # function calls, so they can be used to integrate the error and record 
-        # the last input value. Update them appropriately for your PI controller
+        # TODO: self.integral is an "object attribute" 
+        # that is initialized to zero. Changes to this variable persist across 
+        # function calls, so it can be used to integrate the error 
+        # Update it appropriately for your PI controller
         self.integral 
-        self.last_u 
         
         u = 0 # TODO: implement your controller here
 
-        return max(-self.max_duty, min(self.max_duty, u))
+        return u
     # ------------------------------------------------------------------ #
+
 
     def on_encoder(self, msg):
         stamp = rclpy.time.Time.from_msg(msg.header.stamp)
@@ -97,7 +122,11 @@ class WheelSpeedPI(Node):
             self.publish(0.0, "coast")
             return
 
-        u = self.pi_control(self.target_rad_s, self.speed_rad_s, dt)
+        # The student's controller returns an unclamped command; limit it here.
+        # last_u is the command actually applied, which is what an anti-windup
+        # check against max_duty needs.
+        u_raw = self.pi_control(self.target_rad_s, self.speed_rad_s, dt)
+        u = max(-self.max_duty, min(self.max_duty, u_raw))
         self.last_u = u
 
         # Runaway check: pinned at the limit, and the wheel turning against it.
@@ -109,10 +138,10 @@ class WheelSpeedPI(Node):
             self.publish(0.0, "coast")
             self.get_logger().error(
                 "Wheel is turning against a saturated command -- stopped. "
-                "motor_sign is probably wrong; restart with motor_sign:=-1.0.")
+                "motor_sign is probably wrong; restart with a flipped motor_sign:=+/-1.0.")
             return
 
-        self.publish(u, "pi")
+        self.publish(u, "pi", u_raw)
         self.get_logger().info(
             f"target {self.target_rad_s:6.2f} rad/s  speed {self.speed_rad_s:6.2f} rad/s  u {u:+.3f}",
             throttle_duration_sec=1.0)
@@ -137,7 +166,7 @@ class WheelSpeedPI(Node):
 
     def on_params(self, params):
         for p in params:
-            if p.name in ("target_rad_s") and p.type_ not in (
+            if p.name in ("target_rad_s",) and p.type_ not in (
                     Parameter.Type.DOUBLE, Parameter.Type.INTEGER):
                 return SetParametersResult(successful=False, reason=f"{p.name} must be a number")
             if p.name == "target_rad_s":
@@ -145,7 +174,10 @@ class WheelSpeedPI(Node):
                 self.get_logger().info(f"target = {self.target_rad_s:.2f} rad/s")
         return SetParametersResult(successful=True)
 
-    def publish(self, u, mode):
+    def publish(self, u, mode, u_raw=None):
+        """Send u to motor_node. u_raw is the controller output before clamping,
+        logged for comparison; it defaults to u."""
+        u_raw = u if u_raw is None else u_raw
         now = self.get_clock().now()
         msg = MotorCommand()
         msg.header.stamp = now.to_msg()
@@ -157,7 +189,7 @@ class WheelSpeedPI(Node):
         if self.csv:
             t = (now - self.t0).nanoseconds * 1e-9
             self.csv.write(f"{t:.4f},{mode},{self.target_rad_s:.4f},{self.speed_rad_s:.4f},"
-                           f"{u:.4f}\n")
+                           f"{u:.4f},{u_raw:.4f}\n")
 
 
 def main():
