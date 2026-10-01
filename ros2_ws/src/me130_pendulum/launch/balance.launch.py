@@ -19,13 +19,13 @@ def generate_launch_description():
     motor_sign = LaunchConfiguration("motor_sign")
 
     return LaunchDescription([
-        DeclareLaunchArgument("deadband", default_value="0.0",  # TODO: <--- Change to your deadband value
+        DeclareLaunchArgument("deadband", default_value="0.067",  # TODO: <--- Change to your deadband value
                               description="from lab 1; 0.0 means no compensation"),
         DeclareLaunchArgument("motor_sign", default_value="1.0"),  # TODO: <--- Change this if your motor is spinning in the wrong direction
 
         # Students set these. Zero means the controller does nothing when armed,
         # which is the safe state for a first launch.
-        DeclareLaunchArgument("kp", default_value="0.0"), #proportional gain # TODO: <--- Modify in step 4 and 6
+        DeclareLaunchArgument("kp", default_value="0.5"), #proportional gain # TODO: <--- Modify in step 4 and 6
         DeclareLaunchArgument("ki", default_value="0.0"), #integral gain # TODO: <--- Modify in step 6
         DeclareLaunchArgument("kd", default_value="0.0"), #derivative gain # TODO: <--- Modify in step 6
 
