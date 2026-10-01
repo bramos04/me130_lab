@@ -98,7 +98,18 @@ class WheelSpeedPI(Node):
         # Update it appropriately for your PI controller
         self.integral 
         
-        u = 0 # TODO: implement your controller here
+        kp = 0.02 # modify this value
+        ki = 0.05 # modify this value
+
+        u = kp * (speed_cmd - speed) + self.integral
+
+
+        if u >= 1:
+            u = kp * (speed_cmd - speed) + self.integral
+            self.integral = self.integral
+        else:
+            u = kp * (speed_cmd - speed) + self.integral
+            self.integral = self.integral + ki * (speed_cmd - speed) * dt
 
         return u
     # ------------------------------------------------------------------ #
